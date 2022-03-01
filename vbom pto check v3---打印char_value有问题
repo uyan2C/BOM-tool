@@ -1,0 +1,311 @@
+import openpyxl
+import shutil
+from openpyxl import load_workbook
+from openpyxl import Workbook
+
+
+# vbom中的所有PTO pn列表
+vbom_ptos = []
+
+
+
+def compare_two_lists(list1, list2):
+    list1_only = [item for item in list1 if item not in list2]
+    list2_only = [item for item in list2 if item not in list1]
+    
+    if list1_only != []:
+        print("list1 only:")
+        print(list1_only)
+    
+    if list2_only != []:
+        print("list2 only：")
+        print(list2_only)
+    
+    if list1_only == [] and list2_only == []:
+        print("相同")
+
+
+vbom_filename = input('VBom Report:')
+
+# 从vbom中读取pto pn、od exp
+wb = load_workbook(filename = vbom_filename)
+ws = wb['Full BOM']
+
+# 数据起始行
+row = 2
+# PTO的pn、69、86、od exp
+pto_dict = {}
+
+
+while True:
+    # 当前遍历行
+    pn = ws.cell(row=row, column=3).value
+    
+    # 最后一行
+    if pn is None:
+        break
+   
+    # 当前遍历行的下一行
+    pn_next = ws.cell(row=row+1, column=3).value
+    # 当前遍历行的下下行
+    pn_next_next = ws.cell(row=row+2, column=3).value
+    
+    if pn.startswith('86C'):
+        if pn_next.startswith('69C') and pn_next_next.startswith('SA78'):
+            # 就是要找的PTO Group 86号
+            pn_pto_86_latest = pn
+    elif pn.startswith("69C"):
+        pn_pto_69_name = ws.cell(row=row, column=4).value
+        if not pn_pto_69_name.startswith("SMB") and pn_next.startswith('SA78'):
+            # 才是要找的PTO号
+            pn_pto = pn_next 
+            pn_pto_69 = pn
+     
+            # J列,当前行仍为69号所在行
+            od_exp = ws.cell(row=row, column=10).value
+            
+            pto_dict[pn_pto] = {}
+            pto_dict[pn_pto]["69pn"] = pn_pto_69
+            pto_dict[pn_pto]["86pn"] = pn_pto_86_latest
+            pto_dict[pn_pto]["od exp"] = od_exp
+            
+    row += 1
+'''
+for item in pto_dict.items():
+    print(item)
+'''
+
+#############################################
+######### 拆分od exp ########################
+#############################################
+
+########### od exp 四种情况 #################
+##### 情况1：正常情况  $_MDCPU_$.equals ("P22T TAB OC 2.3GHZ 64BIT")####
+##### 情况2：非   !$_MDCOUNTRY_$.equals ("INDIA")####
+##### 情况3：或 ($_MDCOUNTRY_$.equals ("CHINESE MAINLAND") || $_MDCOUNTRY_$.equals ("UNITED STATES OF AMERICA"))####
+##### 情况4：非 或 !($_MDCOUNTRY_$.equals ("CHINESE MAINLAND") || $_MDCOUNTRY_$.equals ("UNITED STATES OF AMERICA"))####
+##### 情况5：相同的char值不在一个括号里 !$_MDCOUNTRY_$.equals ("CHINA") && $_MDWWAN_$.equals ("NO WWAN") && $_MDVOICECALL_$.equals ("NO") && $_MDEMCP_$.equals ("LP DDR3 3GB + 32GB") && $_MDCOLOUR_$.equals ("IRON GREY") && $_MDBUNDLE_$.equals ("NONE") && !$_MDCOUNTRY_$.equals ("INDIA") 
+
+
+#### 情况1：正常情况
+def od_exp_seprate_basic(od_exp):
+    md_char = od_exp.split("_$.equals (")[0][2:]
+       
+    md_value = od_exp.split("_$.equals (")[1][1:-2]
+    
+    return (md_char, md_value)
+'''    
+#### 情况2：非
+def od_exp_seprate_neg(od_exp)
+    # 去掉第一个字符 ！
+    md_char, md_value = od_exp_seprate_basic(od_exp[1:])
+    md_value = "!" + md_value
+    
+    return (md_char, md_value)
+'''   
+#### 情况3：或
+def od_exp_seprate_or(od_exp):
+    for exp in od_exp.split(" || "):
+        # 第一个元素首位多出一个（    
+        if exp.startswith("($"):
+            exp = exp[1:]
+        # 最后一个元素末尾多一个)
+        if exp.endswith("))"):
+            exp = exp[:-1]
+        md_char, md_value = od_exp_seprate_basic(exp)
+        
+# add_char_to_dict()        
+        
+'''       
+#### 情况4:非 或
+def od_exp_seprate_nef_or(od_exp):
+    md_char, md_value = od_exp_seprate_or(od_exp[1:])
+    
+     md_value = "!" + md_value
+'''
+
+pto_od_dict = {}
+# 按此输出
+char_value_dict = {}
+
+for pto in pto_dict.keys():
+
+    # print(pto)
+    pto_od_dict[pto] = {}
+    
+    od_exp = pto_dict[pto]["od exp"]
+    
+    for od_exp_item in od_exp.split(" && "):
+        
+        #print(od_exp_item)
+    
+        # 情况1：正常情况
+        if od_exp_item.startswith("$_"):
+            md_char, md_value = od_exp_seprate_basic(od_exp_item)
+            if md_char in pto_od_dict[pto]:
+                pto_od_dict[pto][md_char] += md_value
+            else:
+                pto_od_dict[pto][md_char] = md_value
+            
+        # 情况2：非
+        elif od_exp_item.startswith("!$_"):
+            md_char, md_value = od_exp_seprate_basic(od_exp_item[1:])
+            md_value = "!" + md_value
+            if md_char in pto_od_dict[pto]:
+                pto_od_dict[pto][md_char] += md_value
+            else:
+                pto_od_dict[pto][md_char] = md_value
+            
+        # 情况3：或    
+        # 举例：($_MDCOUNTRY_$.equals ("JAPAN") || $_MDCOUNTRY_$.equals ("JORDAN"))
+        elif od_exp_item.startswith("($_"):
+            for exp in od_exp_item.split(" || "):
+                # print(exp)
+                # 第一个元素首位多出一个（    
+                if exp.startswith("($"):
+                    exp = exp[1:]
+                # 最后一个元素末尾多一个)
+                if exp.endswith("))"):
+                    exp = exp[:-1]
+                md_char, md_value = od_exp_seprate_basic(exp)
+                # MDCOUNTRY: PRC UK ME EG....
+                '''
+                print("****************")
+                print(md_char)
+                print(md_value)
+                print("****************")
+                '''
+                if md_char not in pto_od_dict[pto]:
+                    md_value_temp = []
+                md_value_temp.append(md_value)
+            
+            md_value = " ".join(md_value_temp)
+            
+            if md_char in pto_od_dict[pto]:
+                pto_od_dict[pto][md_char] += md_value
+            else:
+                pto_od_dict[pto][md_char] = md_value
+                
+        # 情况4：非 或  
+        # od_exp_item = !($_MDCOUNTRY_$.equals ("CHINESE MAINLAND") || $_MDCOUNTRY_$.equals ("UNITED STATES OF AMERICA"))
+        elif od_exp_item.startswith("!($_"):
+            md_value_temp = []
+            for exp in od_exp_item[1:].split(" || "):
+                # 第一个元素首位多出一个（    
+                if exp.startswith("($"):
+                    exp = exp[1:]
+                # 最后一个元素末尾多一个)
+                if exp.endswith("))"):
+                    exp = exp[:-1]
+                md_char, md_value = od_exp_seprate_basic(exp)
+                md_value = "!" + md_value
+                #print("!!!!!!!!!!!!!!!!!!****************")
+                #print(md_char)
+                #print(md_value)
+                #print("!!!!!!!!!!!!!!!!!!****************")
+                # MDCOUNTRY: PRC UK ME EG....
+                
+                md_value_temp.append(md_value)
+            # 假设非或里的或都是同一个char
+            md_value = " ".join(md_value_temp)
+            
+            if md_char in pto_od_dict[pto]:
+                pto_od_dict[pto][md_char] += md_value
+            else:
+                pto_od_dict[pto][md_char] = md_value
+        
+        print(md_char)
+        print(md_value)
+        
+        if md_char not in char_value_dict:
+            char_value_dict[md_char] = []
+        if md_value not in char_value_dict[md_char]:
+            char_value_dict[md_char].append(md_value)
+        
+        print("-------------------------------------------")
+    print(pto_od_dict[pto])
+    print("###########################################")
+
+# 打印 
+'''            
+for pto in pto_dict.keys():
+    print(pto)
+    
+    for od_exp_item in pto_dict[pto]["od exp"].split(" && "):
+        print(od_exp_item)
+        
+    # print(pto_dict[pto]["od exp"])
+    print(pto_od_dict[pto])
+    print("PPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPP")
+'''
+
+# 必须要打印出来的查询结果
+# 配置分类时，不考虑，只有一个v值的c
+print('\n用于管控机头的所有cv值：\n')
+print(char_value_dict.keys())
+
+for char in char_value_dict.keys():
+    
+    print(f'{char}：{char_value_dict[char]}')
+
+'''
+# 也可以不用确定
+char_check_order = input("请按顺序输入c值：")[2:-2].replace(' ', '')[1:].split("','")
+'''
+#print(char_check_oder)
+
+pto_need_list = []
+
+# 新建excel文档
+
+# 创建一个Excel workbook 对象
+wb = openpyxl.Workbook()
+
+# 创建时，会自动产生一个sheet，通过active获取
+ws = wb.active
+
+# 修改当前 sheet 标题
+ws.title = 'vbom PTO'
+
+# 写入文档
+# 第一行，标题，PTO PN, 69PN, MD...
+ws['A1'].value = "PTO PN"
+ws['B1'].value = "69 PN"
+ws['C1'].value = "OD EXP"
+
+char_list = list(char_value_dict.keys())
+print(type(char_list))
+for col in list(range(len(char_value_dict.keys()))):
+    
+    ws.cell(1, col+4).value = list(char_value_dict.keys())[col]
+
+    
+# 写数据，第2行开始
+row = 2
+
+for pto in pto_dict.keys():
+    ws.cell(row=row, column=1).value = pto
+    ws.cell(row=row, column=2).value = pto_dict[pto]["69pn"]
+    ws.cell(row=row, column=3).value = pto_dict[pto]["od exp"]
+    
+    for col in list(range(len(char_value_dict.keys()))):
+        title = list(char_value_dict.keys())[col]
+        print(title)
+        
+        if title not in pto_od_dict[pto]:
+            continue
+        
+        if isinstance(pto_od_dict[pto][title],list):
+            print("title")
+            print(title)
+            print("pto_od_dict[pto][title]")
+            print(pto_od_dict[pto][title])
+            ws.cell(row=row, column=col+4).value = " ".join(pto_od_dict[pto][title])
+        else:
+            ws.cell(row=row, column=col+4).value = pto_od_dict[pto][title]
+    
+    row += 1
+    
+# 保存文件
+wb.save('vbom PTO.xlsx')
+
